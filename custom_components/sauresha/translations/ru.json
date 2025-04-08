@@ -9,9 +9,9 @@
       "step": {
           "user": {
               "data": {
-                  "email": "имя пользователя (email)",
-                  "password": "пароль",
-                  "scan_interval": "пауза между обновлениями (мин)"
+                  "email": "Имя пользователя (email)",
+                  "password": "Пароль",
+                  "scan_interval": "Интервал обновлений (мин)"
               },
               "description": "Ознакомьтесь с инструкциями, если Вам нужна помощь с настройкой:\nhttps://github.com/volshebniks/sauresha",
               "title": "Интеграция HA c Saures"

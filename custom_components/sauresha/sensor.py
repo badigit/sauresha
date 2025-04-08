@@ -1,63 +1,68 @@
-"""Provides a sensor for Saures."""
 import logging
-from homeassistant.const import CONF_SCAN_INTERVAL
-from datetime import timedelta
 
 from homeassistant.core import HomeAssistant
-from .const import DOMAIN, COORDINATOR, CONF_ISDEBUG
-from .api import SauresHA
-from .entity import SauresControllerSensor, SauresSensor
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
-SCAN_INTERVAL = timedelta(minutes=20)
+
+from .const import DOMAIN, COORDINATOR, CONTROLLERS
+from .entity.base_entity import SauresControllerSensor
+from .entity.sensor_entity import SauresSensor
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Setup the sensor platform."""
-    _LOGGER.exception(
-        "The sauresha platform for the sensor integration does not support YAML platform setup. Please remove it from your config"
-    )
-    return True
+async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    """Set up Saures sensor platform."""
+    coordinator: DataUpdateCoordinator = hass.data[DOMAIN][config_entry.entry_id][COORDINATOR]
 
+    # Собираем все сенсоры (и счетчики, и статусы контроллеров)
+    entities_to_add = []
 
-async def async_setup_entry(hass: HomeAssistant, config_entry, async_add_entities):
-    """Setup sensor platform."""
-    my_sensors: list = []
-    is_debug = CONF_ISDEBUG
-    scan_interval = config_entry.data.get(CONF_SCAN_INTERVAL)
-    controller: SauresHA = hass.data[DOMAIN].get(COORDINATOR)
-    for curflat in controller.flats:
-        try:
-            controllers = await controller.async_get_controllers(curflat)
-            for obj in controllers:
-                if len(obj.get("sn")) > 0:
-                    my_controller = SauresControllerSensor(
-                        hass,
-                        controller,
-                        curflat,
-                        obj.get("sn"),
-                        obj.get("name"),
-                        is_debug,
-                        scan_interval,
-                    )
-                    my_sensors.append(my_controller)
-
-                    sensors = await controller.async_get_sensors(curflat)
-                    for curSensor in sensors:
-                        sensor = SauresSensor(
-                            hass,
-                            controller,
-                            curflat,
-                            curSensor.get("meter_id"),
-                            curSensor.get("sn"),
-                            curSensor.get("meter_name"),
-                            is_debug,
-                            scan_interval,
+    if coordinator.data:  # Убедимся, что данные загружены
+        # 1. Создаем сенсоры состояния для каждого контроллера
+        for flat_id, controllers_in_flat in coordinator.data.get(CONTROLLERS, {}).items():
+            for controller_sn, controller_data in controllers_in_flat.items():
+                if controller_data:  # Проверка на пустые данные
+                    _LOGGER.debug("Setting up Controller Sensor for SN: %s in flat %s", controller_sn, flat_id)
+                    entities_to_add.append(
+                        SauresControllerSensor(
+                            coordinator=coordinator,
+                            flat_id=flat_id,
+                            controller_sn=controller_sn,
+                            controller_data=controller_data,  # Передаем начальные данные
                         )
-                        my_sensors.append(sensor)
-        except Exception:
-            _LOGGER.exception(str(Exception))
+                    )
+                else:
+                    _LOGGER.warning("No data found for controller %s in flat %s during setup.", controller_sn, flat_id)
 
-    if my_sensors:
-        async_add_entities(my_sensors, True)
+        # 2. Создаем сенсоры для счетчиков (воды, газа, температуры и т.д.)
+        for flat_id, sensors_in_flat in coordinator.data.get("sensors", {}).items():
+            for meter_id, meter_data in sensors_in_flat.items():
+                controller_sn = meter_data.get("controller_sn")
+                if controller_sn and meter_data:  # Проверяем наличие controller_sn и данных
+                    _LOGGER.debug(
+                        "Setting up Sensor for Meter ID: %s (Controller: %s) in flat %s", meter_id, controller_sn, flat_id
+                    )
+                    entities_to_add.append(
+                        SauresSensor(
+                            coordinator=coordinator,
+                            flat_id=flat_id,
+                            meter_id=meter_id,
+                            controller_sn=controller_sn,
+                            meter_data=meter_data,  # Передаем начальные данные
+                        )
+                    )
+                else:
+                    _LOGGER.warning("Sensor %s in flat %s is missing controller_sn or data.", meter_id, flat_id)
+
+    else:
+        _LOGGER.warning("Coordinator data is empty, skipping sensor setup.")
+
+    # Добавляем все собранные сущности
+    if entities_to_add:
+        _LOGGER.info("Adding %d Saures sensor entities.", len(entities_to_add))
+        async_add_entities(entities_to_add)
+    else:
+        _LOGGER.info("No Saures sensor entities to add.")
